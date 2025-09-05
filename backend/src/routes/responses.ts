@@ -6,106 +6,150 @@ import { z } from "zod";
 const router = Router();
 
 // Zod schema helpers
-const numeric = z.number().optional();   // no .nullable()
+const numeric = z.number().optional();
 const integer = z.number().int().optional();
 const boolish = z.boolean().optional();
 
 const ResponseSchema = z.object({
-  financialYear: z.string().min(2),
+  financialYear: z.number().int().min(2000).max(2100), // Changed to number
   totalElectricityConsumption: numeric,
   renewableElectricityConsumption: numeric,
   totalFuelConsumption: numeric,
   carbonEmissions: numeric,
   totalEmployees: integer,
   femaleEmployees: integer,
-  averageTrainingHoursPerEmployee: numeric,
+  avgTrainingHoursPerEmployee: numeric, // Fixed field name
   communityInvestmentSpend: numeric,
-  percentIndependentBoardMembers: numeric,
-  dataPrivacyPolicy: boolish,
+  independentBoardMembersPercent: numeric, // Fixed field name
+  hasDataPrivacyPolicy: boolish, // Fixed field name
   totalRevenue: numeric,
 });
 
-// Safe division helper
-function safeDiv(n?: number, d?: number) {
+// Safe division helper that returns number | undefined
+function safeDiv(n?: number, d?: number): number | undefined {
   const nn = typeof n === "number" ? n : 0;
   const dd = typeof d === "number" ? d : 0;
-  if (!dd) return 0;
+  if (!dd) return undefined; // Return undefined instead of 0 for division by zero
   return nn / dd;
 }
 
 // Remove all undefined fields before sending to Prisma
-function removeUndefined<T extends Record<string, any>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([_, v]) => v !== undefined)
-  ) as T;
+function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      (result as any)[key] = value;
+    }
+  }
+  return result;
 }
 
 // Create or update response for a given financial year
 router.post("/", requireAuth, async (req: AuthedRequest, res) => {
-  const parsed = ResponseSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.flatten() });
-  }
+  try {
+    const parsed = ResponseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
 
-  const data = parsed.data;
+    const data = parsed.data;
 
-  // Compute metrics
-  const carbonIntensity = safeDiv(data.carbonEmissions ?? 0, data.totalRevenue ?? 0);
-  const renewableElectricityRatio =
-    100 * safeDiv(data.renewableElectricityConsumption ?? 0, data.totalElectricityConsumption ?? 0);
-  const diversityRatio =
-    100 * safeDiv(data.femaleEmployees ?? 0, data.totalEmployees ?? 0);
-  const communitySpendRatio =
-    100 * safeDiv(data.communityInvestmentSpend ?? 0, data.totalRevenue ?? 0);
+    // Compute metrics - these can be undefined
+    const carbonIntensity = safeDiv(data.carbonEmissions, data.totalRevenue);
+    const renewableElectricityRatio = data.totalElectricityConsumption 
+      ? (data.renewableElectricityConsumption ?? 0) / data.totalElectricityConsumption * 100 
+      : undefined;
+    const diversityRatio = data.totalEmployees 
+      ? (data.femaleEmployees ?? 0) / data.totalEmployees * 100 
+      : undefined;
+    const communitySpendRatio = safeDiv(data.communityInvestmentSpend, data.totalRevenue);
 
-  // Payload with metrics, cleaned of undefineds
-  const payload = removeUndefined({
-    ...data,
-    carbonIntensity,
-    renewableElectricityRatio,
-    diversityRatio,
-    communitySpendRatio,
-  });
+    // Create payload for database
+    const basePayload = {
+      financialYear: data.financialYear,
+      totalElectricityConsumption: data.totalElectricityConsumption,
+      renewableElectricityConsumption: data.renewableElectricityConsumption,
+      totalFuelConsumption: data.totalFuelConsumption,
+      carbonEmissions: data.carbonEmissions,
+      totalEmployees: data.totalEmployees,
+      femaleEmployees: data.femaleEmployees,
+      avgTrainingHoursPerEmployee: data.avgTrainingHoursPerEmployee,
+      communityInvestmentSpend: data.communityInvestmentSpend,
+      independentBoardMembersPercent: data.independentBoardMembersPercent,
+      hasDataPrivacyPolicy: data.hasDataPrivacyPolicy,
+      totalRevenue: data.totalRevenue,
+      // Computed metrics
+      carbonIntensity,
+      renewableElectricityRatio,
+      diversityRatio,
+      communitySpendRatio,
+    };
 
-  const upsert = await prisma.response.upsert({
-    where: {
-      userId_financialYear: {
-        userId: req.user!.id,
-        financialYear: data.financialYear,
-      },
-    },
-    update: removeUndefined(payload),
-    create: removeUndefined({
+    // Remove undefined values for Prisma operations
+    const updatePayload = removeUndefined(basePayload);
+    const createPayload = removeUndefined({
+      ...basePayload,
       userId: req.user!.id,
-      ...payload,
-    }),
-  });
+    });
 
-  res.json(upsert);
+    const upsert = await prisma.eSGResponse.upsert({
+      where: {
+        userId_financialYear: {
+          userId: req.user!.id,
+          financialYear: data.financialYear,
+        },
+      },
+      update: updatePayload,
+      create: createPayload,
+    });
+
+    res.json(upsert);
+  } catch (error) {
+    console.error("Error in POST /responses:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Get all responses for the current user
 router.get("/", requireAuth, async (req: AuthedRequest, res) => {
-  const items = await prisma.response.findMany({
-    where: { userId: req.user!.id },
-    orderBy: { financialYear: "asc" },
-  });
-  res.json(items);
+  try {
+    const items = await prisma.eSGResponse.findMany({
+      where: { userId: req.user!.id },
+      orderBy: { financialYear: "asc" },
+    });
+    res.json(items);
+  } catch (error) {
+    console.error("Error in GET /responses:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Get response for a specific financial year
 router.get("/:year", requireAuth, async (req: AuthedRequest, res) => {
-  const year = req.params.year ?? "";
-  const item = await prisma.response.findUnique({
-    where: {
-      userId_financialYear: {
-        userId: req.user!.id,
-        financialYear: String(year),
+  try {
+    const year = parseInt(req.params.year as string);
+    if (isNaN(year)) {
+      return res.status(400).json({ error: "Invalid year parameter" });
+    }
+
+    const item = await prisma.eSGResponse.findUnique({
+      where: {
+        userId_financialYear: {
+          userId: req.user!.id,
+          financialYear: year,
+        },
       },
-    },
-  });
-  if (!item) return res.status(404).json({ error: "Not found" });
-  res.json(item);
+    });
+
+    if (!item) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    res.json(item);
+  } catch (error) {
+    console.error("Error in GET /responses/:year:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 export default router;
