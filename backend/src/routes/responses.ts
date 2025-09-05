@@ -5,8 +5,8 @@ import { z } from "zod";
 
 const router = Router();
 
-// Schema helpers
-const numeric = z.number().optional(); // no .nullable() now
+// Zod schema helpers
+const numeric = z.number().optional();   // no .nullable()
 const integer = z.number().int().optional();
 const boolish = z.boolean().optional();
 
@@ -22,10 +22,10 @@ const ResponseSchema = z.object({
   communityInvestmentSpend: numeric,
   percentIndependentBoardMembers: numeric,
   dataPrivacyPolicy: boolish,
-  totalRevenue: numeric
+  totalRevenue: numeric,
 });
 
-// Utility safe division
+// Safe division helper
 function safeDiv(n?: number, d?: number) {
   const nn = typeof n === "number" ? n : 0;
   const dd = typeof d === "number" ? d : 0;
@@ -33,14 +33,14 @@ function safeDiv(n?: number, d?: number) {
   return nn / dd;
 }
 
-// Utility: convert nulls to undefined for Prisma
-function nullsToUndefined<T extends Record<string, any>>(obj: T): T {
+// Remove all undefined fields before sending to Prisma
+function removeUndefined<T extends Record<string, any>>(obj: T): T {
   return Object.fromEntries(
-    Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
+    Object.entries(obj).filter(([_, v]) => v !== undefined)
   ) as T;
 }
 
-// Save/Update response
+// Create or update response for a given financial year
 router.post("/", requireAuth, async (req: AuthedRequest, res) => {
   const parsed = ResponseSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -49,6 +49,7 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
 
   const data = parsed.data;
 
+  // Compute metrics
   const carbonIntensity = safeDiv(data.carbonEmissions ?? 0, data.totalRevenue ?? 0);
   const renewableElectricityRatio =
     100 * safeDiv(data.renewableElectricityConsumption ?? 0, data.totalElectricityConsumption ?? 0);
@@ -57,8 +58,8 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
   const communitySpendRatio =
     100 * safeDiv(data.communityInvestmentSpend ?? 0, data.totalRevenue ?? 0);
 
-  // Prepare payload with no nulls
-  const payload = nullsToUndefined({
+  // Payload with metrics, cleaned of undefineds
+  const payload = removeUndefined({
     ...data,
     carbonIntensity,
     renewableElectricityRatio,
@@ -68,19 +69,22 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
 
   const upsert = await prisma.response.upsert({
     where: {
-      userId_financialYear: { userId: req.user!.id, financialYear: data.financialYear },
+      userId_financialYear: {
+        userId: req.user!.id,
+        financialYear: data.financialYear,
+      },
     },
-    update: payload,
-    create: {
+    update: removeUndefined(payload),
+    create: removeUndefined({
       userId: req.user!.id,
       ...payload,
-    },
+    }),
   });
 
   res.json(upsert);
 });
 
-// Get all responses for logged-in user
+// Get all responses for the current user
 router.get("/", requireAuth, async (req: AuthedRequest, res) => {
   const items = await prisma.response.findMany({
     where: { userId: req.user!.id },
@@ -89,7 +93,7 @@ router.get("/", requireAuth, async (req: AuthedRequest, res) => {
   res.json(items);
 });
 
-// Get single year response
+// Get response for a specific financial year
 router.get("/:year", requireAuth, async (req: AuthedRequest, res) => {
   const year = req.params.year ?? "";
   const item = await prisma.response.findUnique({
