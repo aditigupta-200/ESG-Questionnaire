@@ -31,11 +31,18 @@ function safeDiv(n?: number | null, d?: number | null) {
   return nn / dd;
 }
 
+// Utility to convert all nulls in an object to undefined (for Prisma exactOptionalPropertyTypes)
+function nullsToUndefined<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
+  ) as T;
+}
+
 router.post("/", requireAuth, async (req: AuthedRequest, res) => {
   const parsed = ResponseSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const data = parsed.data;
+  const data = nullsToUndefined(parsed.data);
 
   const carbonIntensity = safeDiv(data.carbonEmissions ?? 0, data.totalRevenue ?? 0);
   const renewableElectricityRatio = 100 * safeDiv(data.renewableElectricityConsumption ?? 0, data.totalElectricityConsumption ?? 0);
@@ -74,10 +81,10 @@ router.get("/", requireAuth, async (req: AuthedRequest, res) => {
   res.json(items);
 });
 
-router.get("/:year", requireAuth, async (req: AuthedRequest, res) => {
-  const year = req.params.year;
+router.get(":/year", requireAuth, async (req: AuthedRequest, res) => {
+  const year = req.params.year ?? "";
   const item = await prisma.response.findUnique({
-    where: { userId_financialYear: { userId: req.user!.id, financialYear: year } }
+    where: { userId_financialYear: { userId: req.user!.id, financialYear: String(year) } }
   });
   if (!item) return res.status(404).json({ error: "Not found" });
   res.json(item);
