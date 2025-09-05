@@ -21,26 +21,28 @@ model User {
 model Response {
   id                               Int      @id @default(autoincrement())
   userId                           Int
-  financialYear                    String
-  // Inputs
+  financialYear                    Int      // Changed to Int for consistency
+  // Environmental Metrics
   totalElectricityConsumption      Float?   // kWh
   renewableElectricityConsumption  Float?   // kWh
   totalFuelConsumption             Float?   // liters
   carbonEmissions                  Float?   // T CO2e
+  // Social Metrics
   totalEmployees                   Int?
   femaleEmployees                  Int?
   averageTrainingHoursPerEmployee  Float?
   communityInvestmentSpend         Float?   // INR
+  // Governance Metrics
   percentIndependentBoardMembers   Float?   // %
   dataPrivacyPolicy                Boolean?
   totalRevenue                     Float?   // INR
-  // Computed
+  // Auto-calculated Metrics
   carbonIntensity                  Float?   // T CO2e / INR
   renewableElectricityRatio        Float?   // %
   diversityRatio                   Float?   // %
   communitySpendRatio              Float?   // %
 
-  user       User     @relation(fields: [userId], references: [id])
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
